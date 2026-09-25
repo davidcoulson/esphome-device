@@ -41,7 +41,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/davidcoulson/esphome-device.git"
+    "url": "git+https://github.com/davidcoulson/esphome-device.git"
   },
   "types": "./src/index.d.ts"
 }
