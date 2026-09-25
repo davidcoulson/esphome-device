@@ -1,0 +1,30 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { FakeDevice } from '../src/testing.mjs';
+
+test('FakeDevice records declarations and plays Home Assistant', async () => {
+  const dev = new FakeDevice({ name: 'App' });
+  const sw = dev.switch({ id: 'pause', name: 'Pause' }, (on) => !on ? false : true);
+  const n = dev.number({ name: 'Level', min: 0, max: 10 }, (v) => Math.min(v, 10));
+  const s = dev.sensor({ name: 'Temp', stateClass: 'measurement' });
+  const btn = dev.button({ name: 'Go' }, () => { dev.callService('light.turn_on', { entity_id: 'light.x' }); });
+  dev.service({ name: 'say', args: { text: 'string' }, response: 'optional' }, ({ text }) => ({ said: text }));
+  let seen; dev.subscribeHomeAssistantState('light.x', (st) => { seen = st; });
+  await dev.start();
+  assert.equal(dev.name, 'app');
+  assert.deepEqual(dev.declared.map((d) => `${d.kind}:${d.objectId}`), ['switch:pause', 'number:level', 'sensor:temp', 'button:go']);
+  assert.equal(dev.declared[2].state_class, 1);
+  assert.equal(await dev.command('pause', true), true);
+  assert.equal(await dev.command('level', 50), 10);
+  s.set(21.5); s.set(21.5);
+  assert.deepEqual(s.sets, [21.5, 21.5]);
+  assert.deepEqual(dev.pushed.filter((p) => p.objectId === 'temp'), [{ objectId: 'temp', value: 21.5 }]);
+  await dev.press('go');
+  assert.deepEqual(dev.actions, [{ service: 'light.turn_on', data: { entity_id: 'light.x' }, is_event: false }]);
+  assert.deepEqual(await dev.call('say', { text: 'hi' }), { said: 'hi' });
+  dev.haState('light.x', 'on');
+  assert.equal(seen, 'on');
+  assert.equal(sw.state, true); assert.equal(n.state, 10); assert.ok(btn);
+  await dev.stop();
+  assert.equal(dev.started, false);
+});

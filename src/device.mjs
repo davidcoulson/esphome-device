@@ -30,6 +30,7 @@ function normaliseMac(mac) {
   return { colons: hex.match(/../g).join(':'), plain: hex };
 }
 
+const RESPONSE_MODES = { none: SupportsResponse.NONE, optional: SupportsResponse.OPTIONAL, only: SupportsResponse.ONLY, status: SupportsResponse.STATUS };
 const argTypeOf = (t) => ({ bool: 0, int: 1, float: 2, string: 3, 'bool[]': 4, 'int[]': 5, 'float[]': 6, 'string[]': 7 })[t];
 const argValue = (type, a) => [a.bool_, a.int_, a.float_, a.string_, a.bool_array, a.int_array, a.float_array, a.string_array][type];
 
@@ -188,6 +189,10 @@ export class Device extends EventEmitter {
     this.server = null;
   }
 
+  // Clients past the hello (Home Assistant, the ESPHome dashboard...). `connected` is any of them.
+  get clients() { return [...this.connections].filter((c) => c.connected); }
+  get connected() { return this.clients.length > 0; }
+
   // ---- entities -----------------------------------------------------------------------------
   _add(entity) {
     if (this.entities.has(entity.objectId)) throw new Error(`duplicate entity id ${entity.objectId}`);
@@ -207,16 +212,25 @@ export class Device extends EventEmitter {
   update(opts, handler) { return this._add(new Update(this, opts, handler)); }
 
   // A user-defined action, shown in Home Assistant as esphome.<node>_<name>.
-  // args: { rating_key: 'string', seconds: 'int', loud: 'bool', level: 'float', or 'x[]' arrays }
+  //   args: { rating_key: 'string', seconds: 'int', loud: 'bool', level: 'float', tags: 'string[]' }
+  //         or { query: { type: 'string', description: 'What to play', example: 'Blade Runner' } }
+  //   response: 'none' (default) | 'optional' | 'only' | 'status'
+  // Home Assistant declares every argument as required, so callers must pass them all.
+  // With a response mode other than 'none', HA waits for the handler: a throw becomes the action's
+  // error, and for 'optional'/'only' the handler's return value (a plain object, or anything else
+  // wrapped as { result }) is what `response_variable` receives.
   service(opts, handler) {
     const name = objectIdFrom(opts.name);
-    const args = Object.entries(opts.args ?? {}).map(([n, t]) => {
+    const args = Object.entries(opts.args ?? {}).map(([n, spec]) => {
+      const t = typeof spec === 'string' ? spec : spec?.type;
       const type = argTypeOf(t); if (type === undefined) throw new Error(`service ${name}: unknown arg type ${t} for ${n}`);
-      return { name: n, type };
+      return { name: n, type, description: spec?.description ?? '', example: spec?.example ?? '' };
     });
     const key = fnv1a(name);
-    const svc = { name, key, args, handler, description: opts.description ?? '',
-      info() { return { name, key, args: args.map((a) => ({ name: a.name, type: a.type })), supports_response: SupportsResponse.NONE, description: this.description }; } };
+    const response = RESPONSE_MODES[opts.response ?? 'none'];
+    if (response === undefined) throw new Error(`service ${name}: response must be none, optional, only or status`);
+    const svc = { name, key, args, handler, response, description: opts.description ?? '',
+      info() { return { name, key, args, supports_response: response, description: this.description }; } };
     this.services.set(key, svc);
     return svc;
   }
@@ -225,8 +239,17 @@ export class Device extends EventEmitter {
     if (!svc) return this._log('warn', `${conn.peer}: unknown service key ${msg.key}`);
     const args = {};
     svc.args.forEach((a, i) => { args[a.name] = msg.args[i] ? argValue(a.type, msg.args[i]) : undefined; });
-    try { await svc.handler?.(args, conn); }
-    catch (err) { this._log('warn', `service ${svc.name} failed: ${err.message}`); }
+    let result, error;
+    try { result = await svc.handler?.(args, conn); }
+    catch (err) { error = err; this._log('warn', `service ${svc.name} failed: ${err.message}`); }
+    if (!msg.call_id) return;                            // fire and forget: HA is not waiting
+    let response_data = Buffer.alloc(0);
+    if (!error && msg.return_response) {
+      const body = result !== null && typeof result === 'object' && !Array.isArray(result) ? result : { result: result ?? null };
+      try { response_data = Buffer.from(JSON.stringify(body), 'utf8'); }
+      catch (err) { error = new Error(`response is not JSON: ${err.message}`); }
+    }
+    conn.send('ExecuteServiceResponse', { call_id: msg.call_id, success: !error, error_message: error ? String(error.message || error) : '', response_data });
   }
 
   // ---- talking to Home Assistant -------------------------------------------------------------

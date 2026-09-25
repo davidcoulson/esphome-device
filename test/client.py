@@ -55,6 +55,12 @@ async def main(port, key, password):
     await cli.execute_service(svc, {"text": "hi", "times": 3, "flags": [True, False], "nums": [-2, 7]})
     await asyncio.sleep(0.3)
     out(step="service_sent")
+    ask = next(s for s in services if s.name == "ask")
+    r1 = await cli.execute_service(ask, {"question": "time"}, return_response=True)
+    r2 = await cli.execute_service(ask, {"question": "boom"}, return_response=True)
+    r3 = await cli.execute_service(ask, {"question": "plain"}, return_response=False)
+    out(step="responses", ok=[r1.success, json.loads(r1.response_data)], fail=[r2.success, r2.error_message], status=[r3.success, r3.response_data.decode()],
+        supports=int(ask.supports_response), arg_desc=[(a.name, a.description, a.example) for a in ask.args])
     # HA state subscription from the device side
     seen = []
     cli.subscribe_home_assistant_states(lambda entity_id, attribute: seen.append([entity_id, attribute]))

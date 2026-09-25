@@ -25,6 +25,10 @@ function build(opts) {
   const ev = dev.event({ name: 'Doorbell', eventTypes: ['pressed'] });
   dev.update({ name: 'Firmware', state: { current: '1.0', latest: '1.1', title: 'Test' } }, (what) => { calls.update = what; });
   dev.service({ name: 'say', args: { text: 'string', times: 'int', flags: 'bool[]', nums: 'int[]' } }, (args) => { calls.say = args; });
+  dev.service({ name: 'ask', args: { question: { type: 'string', description: 'What to ask', example: 'time' } }, response: 'optional' }, ({ question }) => {
+    if (question === 'boom') throw new Error('no answer');
+    return question === 'time' ? { answer: 42, at: 'now' } : 'just a string';
+  });
   dev.subscribeHomeAssistantState('light.desk', (state) => { calls.haState = state; });
   return { dev, calls, temp, busy, ev };
 }
@@ -63,7 +67,12 @@ async function exercise(opts, key, password) {
     assert.deepEqual(r.entities.entities.map((e) => e.split(':').slice(0, 2).join(':')).sort(), [
       'BinarySensorInfo:busy', 'ButtonInfo:reboot', 'EventInfo:doorbell', 'NumberInfo:level', 'SelectInfo:mode',
       'SensorInfo:temperature', 'SensorInfo:unknown', 'SwitchInfo:lamp', 'TextInfo:message', 'TextSensorInfo:status', 'UpdateInfo:firmware'].sort());
-    assert.deepEqual(r.entities.services, [{ name: 'say', args: [['text', 3], ['times', 1], ['flags', 4], ['nums', 5]] }]);
+    assert.deepEqual(r.entities.services, [{ name: 'say', args: [['text', 3], ['times', 1], ['flags', 4], ['nums', 5]] }, { name: 'ask', args: [['question', 3]] }]);
+    assert.deepEqual(r.responses.ok, [true, { answer: 42, at: 'now' }]);
+    assert.deepEqual(r.responses.fail, [false, 'no answer']);
+    assert.deepEqual(r.responses.status, [true, '']);
+    assert.equal(r.responses.supports, 1);
+    assert.deepEqual(r.responses.arg_desc, [['question', 'What to ask', 'time']]);
     assert.equal(r.states.states.temperature, 21.5);
     assert.equal(r.states.states.unknown, 'missing');
     assert.equal(r.states.states.lamp, false);

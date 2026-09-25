@@ -66,7 +66,7 @@ one, the encryption key.
 | `text(opts, handler)` | text | `minLength`, `maxLength`, `pattern`, `mode` (`text`, `password`) |
 | `event(opts)` | event | `eventTypes`; call `.fire(type)` |
 | `update(opts, handler)` | update | state `{ current, latest, title, summary, url, inProgress, progress }`; handler gets `'install'` or `'check'` |
-| `service(opts, handler)` | action `esphome.<node>_<name>` | `args: { name: 'string' \| 'int' \| 'float' \| 'bool' \| 'string[]' … }` |
+| `service(opts, handler)` | action `esphome.<node>_<name>` | `args: { name: 'string' \| 'int' \| 'float' \| 'bool' \| 'string[]' … }` or `{ type, description, example }`; `response: 'optional' \| 'only' \| 'status'` |
 
 Every entity has `.state`, `.set(value)` and emits `'state'`. Command handlers get the
 requested value: return nothing to accept it, return a value to substitute, or throw to keep the
@@ -74,6 +74,23 @@ old state (Home Assistant's toggle springs back).
 
 `stateClass` matters: without it the recorder keeps history but never builds long-term
 statistics.
+
+Pass `id` when the display name might change: the object id (and so the Home Assistant entity
+id and its history) comes from `id`, or from `name` when there is no `id`. Set a sensor to `NaN`
+to report it as unknown rather than zero.
+
+### Actions
+
+```js
+dev.service({ name: 'ask', args: { question: { type: 'string', example: 'time' } }, response: 'optional' },
+  async ({ question }) => ({ answer: await lookUp(question) }));
+```
+
+Home Assistant registers this as `esphome.<node>_ask` and declares **every argument as
+required**, so callers pass them all (an empty string for the ones they don't use). With
+`response` set, HA waits for the handler: a throw becomes the action's error message, and for
+`optional`/`only` the return value (a plain object, or anything else wrapped as `{ result }`) is
+what `response_variable` receives. Without `response` the call is fire and forget.
 
 ### Device options
 
@@ -99,6 +116,7 @@ statistics.
 - `dev.subscribeHomeAssistantState('light.x', (state) => …)` asks HA to stream that entity's
   state to the device.
 - `dev.log('info', 'text')` reaches anything that subscribed to logs (the ESPHome dashboard).
+- `dev.connected` and `dev.clients` say whether anything is connected; `dev.on('connect' | 'disconnect', (conn) => …)` fires as clients come and go.
 
 ### Discovery in containers
 
@@ -112,6 +130,22 @@ mDNS is multicast: it only leaves a container on a host network (`network_mode: 
 `src/noise.mjs` the NNpsk0 responder handshake with ChaCha20-Poly1305 transport. `src/device.mjs`
 is the TCP server, per-connection state machine and entity registry; `src/mdns.mjs` a small
 multicast DNS responder.
+
+## Testing your app
+
+`esphome-device/testing` exports `FakeDevice`: the same entity and action surface with no
+sockets. It records what was declared (`declared`), every state push (`pushed`, and `.sets` on
+each entity) and every `callService`/`fireEvent` (`actions`), and it can play Home Assistant:
+
+```js
+import { FakeDevice } from 'esphome-device/testing';
+const dev = new FakeDevice({ name: 'app' });
+buildEntities(dev);                        // your code, given a Device
+await dev.command('pause', true);          // runs the switch handler like HA would
+await dev.press('reboot');
+await dev.call('ask', { question: 'time' });
+dev.haState('light.desk', 'on');           // a subscribed HA state arrives
+```
 
 ## Tests
 

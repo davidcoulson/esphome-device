@@ -1,22 +1,47 @@
 {
   "name": "esphome-device",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Be an ESPHome device: speak the native API's device side from Node so Home Assistant sees your process as a device with entities. Zero dependencies.",
   "type": "module",
   "main": "./src/index.mjs",
   "exports": {
-    ".": "./src/index.mjs",
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.mjs"
+    },
+    "./testing": {
+      "types": "./src/testing.d.ts",
+      "default": "./src/testing.mjs"
+    },
     "./mdns": "./src/mdns.mjs",
     "./noise": "./src/noise.mjs",
     "./proto": "./src/proto.mjs"
   },
-  "files": ["src", "README.md", "LICENSE"],
-  "engines": { "node": ">=22" },
+  "files": [
+    "src",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "test": "node --test test/",
     "test:hass": "node --test test/hass.test.mjs"
   },
-  "keywords": ["esphome", "home-assistant", "native-api", "noise", "device", "virtual"],
+  "keywords": [
+    "esphome",
+    "home-assistant",
+    "native-api",
+    "noise",
+    "device",
+    "virtual"
+  ],
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/davidcoulson/esphome-device.git" }
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/davidcoulson/esphome-device.git"
+  },
+  "types": "./src/index.d.ts"
 }
