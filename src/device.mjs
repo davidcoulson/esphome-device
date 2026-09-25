@@ -8,7 +8,7 @@ import { encode, decode } from './proto.mjs';
 import { byName, byId, LogLevel, ServiceArgType, SupportsResponse, DisconnectReason } from './messages.mjs';
 import { PlaintextFramer, NoiseFramer, INDICATOR_NOISE } from './frame.mjs';
 import { parsePsk } from './noise.mjs';
-import { fnv1a, objectIdFrom, BinarySensor, Sensor, TextSensor, Switch, NumberEntity, Select, Button, Text, Event } from './entities.mjs';
+import { fnv1a, objectIdFrom, BinarySensor, Sensor, TextSensor, Switch, NumberEntity, Select, Button, Text, Event, Update } from './entities.mjs';
 import { Advertiser } from './mdns.mjs';
 
 export const API_VERSION = { major: 1, minor: 10 };
@@ -204,6 +204,7 @@ export class Device extends EventEmitter {
   button(opts, handler) { return this._add(new Button(this, opts, handler)); }
   text(opts, handler) { return this._add(new Text(this, opts, handler)); }
   event(opts) { return this._add(new Event(this, opts)); }
+  update(opts, handler) { return this._add(new Update(this, opts, handler)); }
 
   // A user-defined action, shown in Home Assistant as esphome.<node>_<name>.
   // args: { rating_key: 'string', seconds: 'int', loud: 'bool', level: 'float', or 'x[]' arrays }

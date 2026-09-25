@@ -30,7 +30,9 @@ async def main(port, key, password):
             if s is None: r[oid] = None
             elif getattr(s, "missing_state", False): r[oid] = "missing"
             else:
-                v = getattr(s, "event_type", None) if type(s).__name__ == "Event" else getattr(s, "state", None)
+                if type(s).__name__ == "Event": v = s.event_type
+                elif type(s).__name__ == "UpdateState": v = [s.current_version, s.latest_version]
+                else: v = getattr(s, "state", None)
                 r[oid] = (None if isinstance(v, float) and math.isnan(v) else v)
         return r
     out(step="states", states=snap())
@@ -40,6 +42,7 @@ async def main(port, key, password):
     cli.number_command(by_id["level"].key, 65)
     cli.text_command(by_id["message"].key, "hello there")
     cli.button_command(by_id["reboot"].key)
+    cli.update_command(by_id["firmware"].key, aioesphomeapi.UpdateCommand.INSTALL)
     await asyncio.sleep(0.4)
     out(step="after_commands", states=snap())
     # Actions the device asks HA to perform

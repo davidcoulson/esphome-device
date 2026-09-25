@@ -11,6 +11,7 @@ export const TextMode = { TEXT: 0, PASSWORD: 1 };
 export const LogLevel = { NONE: 0, ERROR: 1, WARN: 2, INFO: 3, CONFIG: 4, DEBUG: 5, VERBOSE: 6, VERY_VERBOSE: 7 };
 export const ServiceArgType = { BOOL: 0, INT: 1, FLOAT: 2, STRING: 3, BOOL_ARRAY: 4, INT_ARRAY: 5, FLOAT_ARRAY: 6, STRING_ARRAY: 7 };
 export const SupportsResponse = { NONE: 0, OPTIONAL: 1, ONLY: 2, STATUS: 100 };
+export const UpdateCommand = { NONE: 0, UPDATE: 1, CHECK: 2 };
 export const DisconnectReason = { UNSPECIFIED: 0, USER_INITIATED: 1, RESTARTING: 2, OTA_UPDATE: 3, DEEP_SLEEP: 4 };
 
 const entityInfo = (extra) => ({ object_id: [1, 'string'], key: [2, 'fixed32'], name: [3, 'string'], ...extra });
@@ -80,6 +81,9 @@ export const messages = [
   M('ListEntitiesTextResponse', 97, entityInfo({ icon: [5, 'string'], disabled_by_default: [6, 'bool'], entity_category: [7, 'enum'], min_length: [8, 'uint32'], max_length: [9, 'uint32'], pattern: [10, 'string'], mode: [11, 'enum'] })),
   M('TextStateResponse', 98, { key: [1, 'fixed32'], state: [2, 'string'], missing_state: [3, 'bool'] }),
   M('TextCommandRequest', 99, { key: [1, 'fixed32'], state: [2, 'string'] }),
+  M('ListEntitiesUpdateResponse', 116, entityInfo({ icon: [5, 'string'], disabled_by_default: [6, 'bool'], entity_category: [7, 'enum'], device_class: [8, 'string'] })),
+  M('UpdateStateResponse', 117, { key: [1, 'fixed32'], missing_state: [2, 'bool'], in_progress: [3, 'bool'], has_progress: [4, 'bool'], progress: [5, 'float'], current_version: [6, 'string'], latest_version: [7, 'string'], title: [8, 'string'], release_summary: [9, 'string'], release_url: [10, 'string'] }),
+  M('UpdateCommandRequest', 118, { key: [1, 'fixed32'], command: [2, 'enum'] }),
   M('ListEntitiesEventResponse', 107, entityInfo({ icon: [5, 'string'], disabled_by_default: [6, 'bool'], entity_category: [7, 'enum'], device_class: [8, 'string'], event_types: [9, 'string[]'] })),
   M('EventResponse', 108, { key: [1, 'fixed32'], event_type: [2, 'string'] }),
 ];

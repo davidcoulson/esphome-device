@@ -35,7 +35,7 @@ export class Entity extends EventEmitter {
   set state(v) { this.set(v); }
   // Set the state and push it to every subscribed client. Returns true when it changed.
   set(v) {
-    const changed = this._state !== v;
+    const changed = typeof v === 'object' && v !== null ? JSON.stringify(this._state) !== JSON.stringify(v) : this._state !== v;
     this._state = v;
     this.device._push(this, changed);
     if (changed) this.emit('state', v);
@@ -145,4 +145,25 @@ export class Event extends Entity {
   }
 }
 
-export const commandTypes = [Switch, NumberEntity, Select, Button, Text];
+// Update entity: state is { current, latest, title, summary, url, inProgress, progress }. The
+// handler gets 'install' or 'check' when Home Assistant asks; installing is the app's business.
+export class Update extends Entity {
+  static list = 'ListEntitiesUpdateResponse'; static stateMsg = 'UpdateStateResponse'; static command = 'UpdateCommandRequest';
+  constructor(device, opts, handler) { super(device, opts); this.handler = handler; if (!this.deviceClass) this.deviceClass = 'firmware'; }
+  info() { return { ...super.info(), device_class: this.deviceClass }; }
+  get hasState() { return !!this._state?.current; }
+  set(v) { return super.set(v ? { ...(this._state || {}), ...v } : v); }
+  stateMessage() {
+    const s = this._state || {};
+    return { key: this.key, missing_state: !this.hasState, in_progress: !!s.inProgress, has_progress: typeof s.progress === 'number', progress: s.progress ?? 0,
+      current_version: s.current ?? '', latest_version: s.latest ?? s.current ?? '', title: s.title ?? '', release_summary: s.summary ?? '', release_url: s.url ?? '' };
+  }
+  async onCommand(msg) {
+    const what = msg.command === 1 ? 'install' : msg.command === 2 ? 'check' : null;
+    if (!what) return;
+    try { await this.handler?.(what, this); this.emit(what); }
+    catch (err) { this.device._log('warn', `${this.objectId}: ${what} failed: ${err.message}`); }
+  }
+}
+
+export const commandTypes = [Switch, NumberEntity, Select, Button, Text, Update];

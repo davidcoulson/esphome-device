@@ -2,7 +2,7 @@
 
 Be an ESPHome device from Node. This library speaks the **device side** of the ESPHome native
 API, so Home Assistant's built-in ESPHome integration connects to your process and sees a
-device with entities: sensors, switches, selects, numbers, buttons, text, events and
+device with entities: sensors, switches, selects, numbers, buttons, text, events, update entities and
 user-defined actions. No MQTT broker, no custom integration, no YAML.
 
 - Zero dependencies (Node ≥ 22, `node:crypto` for the Noise handshake).
@@ -65,6 +65,7 @@ one, the encryption key.
 | `button(opts, handler)` | button | |
 | `text(opts, handler)` | text | `minLength`, `maxLength`, `pattern`, `mode` (`text`, `password`) |
 | `event(opts)` | event | `eventTypes`; call `.fire(type)` |
+| `update(opts, handler)` | update | state `{ current, latest, title, summary, url, inProgress, progress }`; handler gets `'install'` or `'check'` |
 | `service(opts, handler)` | action `esphome.<node>_<name>` | `args: { name: 'string' \| 'int' \| 'float' \| 'bool' \| 'string[]' … }` |
 
 Every entity has `.state`, `.set(value)` and emits `'state'`. Command handlers get the
