@@ -119,3 +119,24 @@ test('mDNS packets carry PTR, SRV, TXT and A with the keys HA reads', () => {
   for (const k of ['version=', 'mac=', 'platform=', 'board=', 'network=', 'friendly_name=Strimmer', 'project_name=x.y', 'api_encryption=Noise_NNpsk0']) assert.ok(txt.includes(k), k);
   assert.ok(pkt.includes(Buffer.from([10, 0, 0, 5])));
 });
+
+test('a plaintext client on a Noise-only device gets the explicit encryption reject, not a bare close', async () => {
+  const net = await import('node:net');
+  const d = new Device({ name: 'needs-key', port: 0, host: '127.0.0.1', mdns: false, log: false, noiseKey: Buffer.alloc(32, 7).toString('base64') });
+  await d.start();
+  try {
+    const got = await new Promise((resolve, reject) => {
+      const chunks = [];
+      const sock = net.connect(d.port, '127.0.0.1', () => sock.write(Buffer.from([0x00, 0x00, 0x01]))); // plaintext preamble, HelloRequest
+      sock.on('data', (c) => chunks.push(c));
+      sock.on('close', () => resolve(Buffer.concat(chunks)));
+      sock.on('error', reject);
+      setTimeout(() => reject(new Error('the device did not close the connection')), 3000).unref();
+    });
+    // 0x01 (noise indicator), uint16 length, 0x01 (reject marker), reason text.
+    assert.equal(got[0], 0x01);
+    assert.equal(got.readUInt16BE(1), got.length - 3);
+    assert.equal(got[3], 0x01);
+    assert.equal(got.subarray(4).toString('ascii'), 'Bad indicator byte');
+  } finally { await d.stop(); }
+});
