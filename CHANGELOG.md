@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Fix:** a plaintext client connecting to a device that requires Noise encryption now gets the explicit
+  "Bad indicator byte" reject frame before the close, as ESPHome firmware does. `aioesphomeapi` turns it into
+  `RequiresEncryptionAPIError`, which is how Home Assistant's *Add integration > ESPHome* flow learns it must ask
+  for an encryption key. Before, the bare close showed up as a connection error and the device could not be
+  added from the UI.
+
 ## 0.2.0 — 2026-09-25
 
 Learned from the first two apps on it (the theater panel and the Strimmer add-on).

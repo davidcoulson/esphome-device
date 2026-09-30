@@ -56,7 +56,12 @@ class Connection {
       if (!this.framer) {
         const wantsNoise = chunk[0] === INDICATOR_NOISE;
         if (wantsNoise && !this.device.psk) { this.device._log('warn', `${this.peer}: client wants encryption but no noise key is set`); return this.close(); }
-        if (!wantsNoise && this.device.psk && !this.device.allowPlaintext) { this.device._log('warn', `${this.peer}: client sent plaintext but a noise key is required`); return this.close(); }
+        if (!wantsNoise && this.device.psk && !this.device.allowPlaintext) { this.device._log('warn', `${this.peer}: client sent plaintext but a noise key is required`);
+          // Answer with the explicit reject frame real ESPHome devices send. aioesphomeapi turns it into
+          // RequiresEncryptionAPIError, which is how Home Assistant's setup flow learns to ask for the key;
+          // a bare close looks like a connection error instead.
+          try { this.socket.write(new NoiseFramer({ psk: this.device.psk, name: this.device.name, mac: this.device.mac.plain }).rejectFrame('Bad indicator byte')); } catch {}
+          return this.close(); }
         this.framer = wantsNoise
           ? new NoiseFramer({ psk: this.device.psk, name: this.device.name, mac: this.device.mac.plain })
           : new PlaintextFramer();
