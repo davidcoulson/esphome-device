@@ -117,6 +117,14 @@ test('noise: wrong key is rejected with a handshake failure', { timeout: 30_000 
   } finally { await dev.stop(); }
 });
 
+test('noise: a client without a key is told encryption is required', { timeout: 30_000 }, async () => {
+  const { dev } = build({ noiseKey: randomBytes(32).toString('base64') });
+  await dev.start();
+  try {
+    await assert.rejects(run(dev, '', ''), /RequiresEncryptionAPIError/);
+  } finally { await dev.stop(); }
+});
+
 test('password: legacy password is checked', { timeout: 30_000 }, async () => {
   const { dev } = build({ password: 'secret' });
   await dev.start();

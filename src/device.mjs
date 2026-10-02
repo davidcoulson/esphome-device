@@ -56,7 +56,14 @@ class Connection {
       if (!this.framer) {
         const wantsNoise = chunk[0] === INDICATOR_NOISE;
         if (wantsNoise && !this.device.psk) { this.device._log('warn', `${this.peer}: client wants encryption but no noise key is set`); return this.close(); }
-        if (!wantsNoise && this.device.psk && !this.device.allowPlaintext) { this.device._log('warn', `${this.peer}: client sent plaintext but a noise key is required`); return this.close(); }
+        if (!wantsNoise && this.device.psk && !this.device.allowPlaintext) {
+          // Answer in Noise framing as ESPHome does: a reply whose first byte is 0x01 is how
+          // Home Assistant learns the device needs a key and asks for one, where a bare close
+          // reads as "can't connect".
+          this.device._log('warn', `${this.peer}: client sent plaintext but a noise key is required`);
+          try { this.socket.write(new NoiseFramer({}).rejectFrame('Bad indicator byte')); } catch {}
+          return this.close();
+        }
         this.framer = wantsNoise
           ? new NoiseFramer({ psk: this.device.psk, name: this.device.name, mac: this.device.mac.plain })
           : new PlaintextFramer();

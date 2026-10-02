@@ -1,6 +1,6 @@
 {
   "name": "esphome-device",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Be an ESPHome device: speak the native API's device side from Node so Home Assistant sees your process as a device with entities. Zero dependencies.",
   "type": "module",
   "main": "./src/index.mjs",

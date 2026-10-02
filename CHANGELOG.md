@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 — 2026-10-02
+
+- **A client without a key is told one is needed.** With `noiseKey` set, a plaintext hello now
+  gets ESPHome's Noise-framed reject before the close, so Home Assistant's add flow asks for the
+  encryption key (and an existing entry starts a reauth) instead of failing with "Unable to
+  connect… make sure the YAML includes an api section".
+
 ## 0.2.0 — 2026-09-25
 
 Learned from the first two apps on it (the theater panel and the Strimmer add-on).
