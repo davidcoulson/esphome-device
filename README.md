@@ -96,7 +96,7 @@ what `response_variable` receives. Without `response` the call is fire and forge
 
 | Option | Default | Notes |
 | --- | --- | --- |
-| `name` | required | lower-case with hyphens, like an ESPHome node name |
+| `name` | required | lower-case with hyphens, like an ESPHome node name. It is also the mDNS host label, so at most 63 bytes while mDNS is on |
 | `friendlyName` | `name` | what Home Assistant shows |
 | `mac` | derived from `name` | HA's unique id for the device. `macFromName()` is stable across restarts; set your own to keep an existing device |
 | `port`, `host` | 6053, `0.0.0.0` | |
@@ -104,8 +104,41 @@ what `response_variable` receives. Without `response` the call is fire and forge
 | `password` | none | legacy API password (deprecated in HA, still honoured) |
 | `project` | none | `{ name, version }`, shown on the device page |
 | `model`, `manufacturer`, `area`, `esphomeVersion` | Node version, `esphome-device`, none, a current ESPHome version | HA gates a few features on the version string |
-| `mdns` | `true` | `false` to skip advertising, or `{ address, txt }` |
+| `mdns` | `true` | `false` to skip advertising, or `{ address, txt, probe }`; see [Discovery](#discovery) |
 | `log` | `console` | anything with `info`/`warn`; `false` for silence |
+
+The connection limits are options too. The defaults are ESPHome's own, so a client that works
+with an ESPHome board works here.
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `maxConnections` | 8 | open sockets at once; more are closed as they are accepted |
+| `handshakeTimeoutMs` | 60000 | time from accept to a finished hello (and Noise handshake); an absolute deadline that traffic does not extend |
+| `pingIntervalMs` | 30000 | how often a connected client is pinged |
+| `idleTimeoutMs` | 90000 | a client is dropped after this long without a complete message; bytes that never finish a frame do not count |
+| `maxMessageSize` | 32768 | the largest message a client may send, refused at the frame header before the body is read; handshake frames are capped at 128 bytes |
+| `maxWriteBuffer` | 1 MiB | bytes queued for a client that has stopped reading; past it the client is dropped and Home Assistant reconnects |
+
+`dev.limits` holds the values in force, and `DEFAULTS` is exported.
+
+### Lifecycle
+
+- `await dev.start()` resolves once the port is open and never waits for a client. It rejects if
+  the port cannot be opened (`EADDRINUSE`). With mDNS on it takes about 750 ms longer, for the
+  name probe. An mDNS failure or conflict is logged and does not fail `start()`. Calling it
+  while running does nothing.
+- `await dev.stop()` sends every client a `DisconnectRequest` with reason RESTARTING, sends the
+  mDNS goodbye and closes the port; Home Assistant marks the entities unavailable. It is safe to
+  call twice, safe to call while `start()` is still probing, and `start()` works again after it.
+- After `start()`, a server error goes to `dev.on('error', …)` when there is a listener, and is
+  logged when there is not. It never ends the process on its own.
+
+### API version
+
+The device answers every hello with API 1.10 and does not check the client's version, which is
+what ESPHome's own firmware does. The client decides whether it can talk to the server
+(`aioesphomeapi`, and so Home Assistant, refuses a server whose major version is above 2). What
+the client announced is on `connection.apiVersion`.
 
 ### Talking back to Home Assistant
 
@@ -116,12 +149,32 @@ what `response_variable` receives. Without `response` the call is fire and forge
 - `dev.subscribeHomeAssistantState('light.x', (state) => …)` asks HA to stream that entity's
   state to the device.
 - `dev.log('info', 'text')` reaches anything that subscribed to logs (the ESPHome dashboard).
-- `dev.connected` and `dev.clients` say whether anything is connected; `dev.on('connect' | 'disconnect', (conn) => …)` fires as clients come and go.
+- `dev.connected` and `dev.clients` say whether anything is connected; `dev.on('connect' | 'disconnect', (conn) => …)` fires as clients come and go. A connection has `peer`, `clientInfo`, `apiVersion` and `connected`.
+- Action handlers get `(args, connection)`; under `FakeDevice` the connection is a stand-in with the same fields.
 
-### Discovery in containers
+### Discovery
 
-mDNS is multicast: it only leaves a container on a host network (`network_mode: host`, or
-`host_network: true` for a Home Assistant add-on). On a bridge network add the device by IP.
+The device advertises `_esphomelib._tcp.local` with the TXT keys Home Assistant reads
+(`version`, `mac`, `platform`, `board`, `network`, `friendly_name`, `project_name`,
+`project_version`, and `api_encryption` when a key is set).
+
+- **Names are probed first.** Before announcing it asks three times, 250 ms apart, whether
+  anyone already answers for its host and service names. If another host does, this device does
+  not advertise: it logs a warning and emits `mdns-conflict` with `yielded: true`, and still
+  serves TCP, so it can be added by address. A device that has already announced keeps its name
+  when a newcomer claims it, warns, emits `mdns-conflict` with `yielded: false`, and announces
+  again. Pass `mdns: { probe: false }` to skip the probe.
+- **Only the local network is answered.** Queries from addresses outside this host's subnets
+  are ignored, so an exposed port 5353 cannot be used to reflect replies at someone else.
+- **Replies are multicast.** A query from port 5353 is answered by multicast even when it asks
+  for unicast, because several processes share that port on one host and a unicast datagram
+  reaches only one of them. Legacy resolvers on other ports get a unicast reply.
+- **Limits are checked up front.** A name label over 63 bytes, a name over 255, or a TXT entry
+  over 255 bytes (`friendly_name` is the usual suspect) throws when the Device is constructed,
+  rather than going out malformed or cut short.
+- **Containers.** mDNS is multicast, so it only leaves a container on a host network
+  (`network_mode: host`, or `host_network: true` for a Home Assistant add-on). On a bridge or
+  macvlan network, turn it off and add the device by address.
 
 ## How it works
 

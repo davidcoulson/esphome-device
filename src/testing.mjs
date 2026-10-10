@@ -32,6 +32,7 @@ export class FakeDevice extends EventEmitter {
     this.haSubscriptions = new Map();
     this.started = false;
     this.connections = new Set();
+    this.fakeConnection = { peer: 'fake:0', clientInfo: 'FakeDevice', apiVersion: { major: 1, minor: 10 }, connected: true, close() {} };
     this.logger = null;
   }
   get clients() { return []; }
@@ -74,11 +75,12 @@ export class FakeDevice extends EventEmitter {
     return e.state;
   }
   press(objectId) { return this.command(objectId); }
-  // Call a user-defined action with named args; returns the handler's result (or throws).
-  async call(name, args = {}) {
+  // Call a user-defined action with named args; returns the handler's result (or throws). The
+  // handler gets a stand-in connection, as a real one would, so code that reads conn.peer runs.
+  async call(name, args = {}, connection = this.fakeConnection) {
     const svc = this.services.get(objectIdFrom(name));
     if (!svc) throw new Error(`no service ${name}`);
-    return svc.handler?.(args, null);
+    return svc.handler?.(args, connection);
   }
   // Deliver a Home Assistant entity state the app subscribed to.
   haState(entityId, state, attribute = '') { this._haState({ entity_id: entityId, state, attribute }); }

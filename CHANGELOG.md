@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.3.0 — 2026-10-10
+
+Hardening from a full code review. The limits match ESPHome's own, so nothing that works with
+an ESPHome board is refused here.
+
+- **Frames are bounded at the header.** A plaintext length over `maxMessageSize` (32 KiB by
+  default), a Noise data frame over that plus its header and tag, or a handshake frame over 128
+  bytes is refused as soon as its length is readable, before the body is buffered. Overlong
+  varints and message types above 65535 are refused too.
+- **Connection limits.** `maxConnections` (8) caps open sockets; `handshakeTimeoutMs` (60 s) is
+  an absolute deadline from accept to a finished hello and handshake; `idleTimeoutMs` (90 s)
+  now counts only complete messages, so trickled bytes cannot hold a connection open; and
+  `maxWriteBuffer` (1 MiB) drops a client that stopped reading instead of buffering for it
+  without end. All are options, and `dev.limits` and `DEFAULTS` show them.
+- **mDNS probes before announcing** and yields to a host that already holds the name, or
+  defends a name it already announced; either way it warns and emits `mdns-conflict`.
+- **mDNS answers only the local network**, so it cannot be used for reflection, and answers
+  port-5353 queries by multicast, which every process sharing the port receives.
+- **mDNS names and TXT entries are validated** at construction: a label over 63 bytes, a name
+  over 255 or a TXT entry over 255 throws instead of going out malformed or silently cut.
+- **A truncated protobuf fixed64 field is an error**, not a short message.
+- **A server error after start no longer ends the process** when the app has no `error`
+  listener; it is logged.
+- **`dev.log('very_verbose', …)`** sends level 7; an unknown level falls back to info.
+- `connection.apiVersion` records the client's version. The device still accepts any version,
+  as ESPHome's firmware does; the README says so.
+- `FakeDevice.call()` hands handlers a stand-in connection, matching the runtime and the types.
+- Types for the limits, `Connection.apiVersion`, `mdns-conflict` and the lifecycle; the README
+  has Lifecycle, API version and Discovery sections.
+
 ## 0.2.1 — 2026-10-02
 
 - **A client without a key is told one is needed.** With `noiseKey` set, a plaintext hello now

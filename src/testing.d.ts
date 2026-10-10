@@ -1,4 +1,4 @@
-import type { Device, DeviceOptions } from './index.js';
+import type { Device, DeviceOptions, Connection } from './index.js';
 /** A Device with no sockets, for tests: records declarations, state pushes and actions, and plays Home Assistant. */
 export class FakeDevice extends Device {
   constructor(opts?: Partial<DeviceOptions> & { name?: string });
@@ -10,8 +10,10 @@ export class FakeDevice extends Device {
   /** Send a command as Home Assistant would; resolves to the resulting state. */
   command(objectId: string, value?: unknown): Promise<unknown>;
   press(objectId: string): Promise<unknown>;
+  /** The stand-in connection handlers receive from call(). */
+  readonly fakeConnection: Connection;
   /** Call a user-defined action; resolves to the handler's result. */
-  call(name: string, args?: Record<string, unknown>): Promise<unknown>;
+  call(name: string, args?: Record<string, unknown>, connection?: Connection): Promise<unknown>;
   /** Deliver a Home Assistant entity state the app subscribed to. */
   haState(entityId: string, state: string, attribute?: string): void;
 }

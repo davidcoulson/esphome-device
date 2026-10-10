@@ -17,14 +17,18 @@ export interface EntityOptions {
   disabledByDefault?: boolean;
 }
 
-export interface Entity<T> extends EventEmitter {
+/** What every entity has; each kind adds the events it emits. */
+export interface EntityBase<T> extends EventEmitter {
   readonly objectId: string;
   readonly key: number;
   readonly name: string;
   state: T | undefined;
   /** Set the state and push it to subscribed clients. Returns true when it changed. */
   set(value: T | undefined): boolean;
+}
+export interface Entity<T> extends EntityBase<T> {
   on(event: 'state', listener: (value: T) => void): this;
+  on(event: string | symbol, listener: (...args: any[]) => void): this;
 }
 export interface BinarySensor extends Entity<boolean> {}
 export interface Sensor extends Entity<number> {}
@@ -33,8 +37,15 @@ export interface Switch extends Entity<boolean> {}
 export interface NumberEntity extends Entity<number> {}
 export interface Select extends Entity<string> { readonly options: string[] }
 export interface Text extends Entity<string> {}
-export interface Button extends Entity<never> { on(event: 'press', listener: () => void): this }
-export interface EventEntity extends Entity<never> { fire(type: string): void; on(event: 'fire', listener: (type: string) => void): this }
+export interface Button extends EntityBase<never> {
+  on(event: 'press', listener: () => void): this;
+  on(event: string | symbol, listener: (...args: any[]) => void): this;
+}
+export interface EventEntity extends EntityBase<never> {
+  fire(type: string): void;
+  on(event: 'fire', listener: (type: string) => void): this;
+  on(event: string | symbol, listener: (...args: any[]) => void): this;
+}
 export interface UpdateState { current?: string; latest?: string; title?: string; summary?: string; url?: string; inProgress?: boolean; progress?: number }
 export interface UpdateEntity extends Entity<UpdateState> {}
 
@@ -52,16 +63,37 @@ export interface ServiceOptions {
   response?: 'none' | 'optional' | 'only' | 'status';
 }
 export interface Service { readonly name: string; readonly key: number }
-export type ServiceHandler = (args: Record<string, any>, connection: Connection | null) => any;
+/** Receives the arguments by name and the connection that called (a stand-in under FakeDevice). */
+export type ServiceHandler = (args: Record<string, any>, connection: Connection) => any;
 
 export interface Connection {
+  /** "address:port" of the client. */
   readonly peer: string;
+  /** The client's own name from its hello, e.g. "Home Assistant 2026.9.3". */
   readonly clientInfo: string;
+  /** The API version the client announced. The device accepts any; see API_VERSION. */
+  readonly apiVersion: { major: number; minor: number } | null;
+  /** True once the hello (and password, if one is set) is done. */
   readonly connected: boolean;
   close(reason?: number): void;
 }
 
-export interface DeviceOptions {
+export interface Limits {
+  /** Open sockets at once; more are closed on accept. Default 8, as ESPHome on a host. */
+  maxConnections?: number;
+  /** Time from accept to a finished hello (and Noise handshake). Absolute; traffic does not extend it. Default 60000. */
+  handshakeTimeoutMs?: number;
+  /** How often the device pings a connected client. Default 30000. */
+  pingIntervalMs?: number;
+  /** Drop a client after this long without a complete message. Default 90000. */
+  idleTimeoutMs?: number;
+  /** Largest message accepted from a client, checked at the frame header. Default 32768, as ESPHome. */
+  maxMessageSize?: number;
+  /** Bytes queued for a client that is not reading before it is dropped. Default 1 MiB. */
+  maxWriteBuffer?: number;
+}
+
+export interface DeviceOptions extends Limits {
   /** Node name: lower-case with hyphens. Entity ids start with it. */
   name: string;
   friendlyName?: string;
@@ -82,8 +114,8 @@ export interface DeviceOptions {
   esphomeVersion?: string;
   serverInfo?: string;
   compilationTime?: string;
-  /** false to skip advertising; or { address, txt }. */
-  mdns?: boolean | { address?: string; txt?: Record<string, string> };
+  /** false to skip advertising; or { address, txt, probe }. probe: false skips the conflict check before announcing. */
+  mdns?: boolean | { address?: string; txt?: Record<string, string>; probe?: boolean };
   /** Anything with info/warn (console by default); false for silence. */
   log?: false | { info?: (msg: string) => void; warn?: (msg: string) => void; debug?: (msg: string) => void; log?: (msg: string) => void };
 }
@@ -94,10 +126,12 @@ export class Device extends EventEmitter {
   readonly friendlyName: string;
   readonly mac: { colons: string; plain: string };
   port: number;
-  readonly entities: Map<string, Entity<any>>;
+  readonly entities: Map<string, EntityBase<any>>;
   /** Clients past the hello. */
   readonly clients: Connection[];
   readonly connected: boolean;
+  /** The limits in force: the defaults with any options applied. */
+  readonly limits: Required<Limits>;
 
   binarySensor(opts: EntityOptions & { state?: boolean }): BinarySensor;
   sensor(opts: EntityOptions & { unit?: string; accuracyDecimals?: number; stateClass?: SensorStateClass; forceUpdate?: boolean; state?: number }): Sensor;
@@ -118,13 +152,30 @@ export class Device extends EventEmitter {
   subscribeHomeAssistantState(entityId: string, handler: (state: string, entityId: string, attribute: string) => void): () => void;
   subscribeHomeAssistantState(entityId: string, attribute: string, handler: (state: string, entityId: string, attribute: string) => void): () => void;
   /** Send a log line to clients that subscribed to logs. */
-  log(level: 'error' | 'warn' | 'info' | 'config' | 'debug' | 'verbose', message: string): void;
+  log(level: 'error' | 'warn' | 'info' | 'config' | 'debug' | 'verbose' | 'very_verbose', message: string): void;
 
+  /**
+   * Listen (and advertise, unless mdns is false). Resolves once the port is open; rejects if it
+   * cannot be (EADDRINUSE). Never waits for a client. An mDNS failure or conflict is logged and
+   * does not fail start. Calling it again while running is a no-op.
+   */
   start(): Promise<this>;
+  /**
+   * Send every client a DisconnectRequest (reason RESTARTING), send the mDNS goodbye, close the
+   * port. Home Assistant marks the entities unavailable. Safe to call twice; start() works again after.
+   */
   stop(): Promise<void>;
   on(event: 'connect' | 'disconnect', listener: (connection: Connection) => void): this;
+  /** A server error after listening. Without a listener it is logged, not thrown. */
   on(event: 'error', listener: (err: Error) => void): this;
+  /**
+   * Another host claims this device's mDNS name. yielded: true when it held the name first (the
+   * device then does not advertise); false when it arrived later (the device keeps advertising).
+   */
+  on(event: 'mdns-conflict', listener: (info: { name: string; from: string; yielded: boolean }) => void): this;
 }
+
+export const DEFAULTS: Required<Limits>;
 
 export function macFromName(name: string): string;
 export function fnv1a(str: string): number;

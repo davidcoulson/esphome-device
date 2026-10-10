@@ -124,6 +124,7 @@ export function decode(schema, buf) {
       const slice = buf.subarray(at, at + len[0]); at += len[0];
       value = f?.schema ? decode(f.schema, slice) : f?.base === 'bytes' ? Buffer.from(slice) : slice.toString('utf8');
     } else if (wire === WIRE_FIXED64) {
+      if (at + 8 > buf.length) throw new Error('truncated fixed64');
       at += 8; continue;
     } else throw new Error(`unsupported wire type ${wire}`);
     if (!f) continue;                                   // a field this schema does not know: skipped

@@ -6,15 +6,31 @@ import net from 'node:net';
 import { createHash } from 'node:crypto';
 import { encode, decode } from './proto.mjs';
 import { byName, byId, LogLevel, ServiceArgType, SupportsResponse, DisconnectReason } from './messages.mjs';
-import { PlaintextFramer, NoiseFramer, INDICATOR_NOISE } from './frame.mjs';
+import { PlaintextFramer, NoiseFramer, INDICATOR_NOISE, MAX_MESSAGE_SIZE } from './frame.mjs';
 import { parsePsk } from './noise.mjs';
 import { fnv1a, objectIdFrom, BinarySensor, Sensor, TextSensor, Switch, NumberEntity, Select, Button, Text, Event, Update } from './entities.mjs';
 import { Advertiser } from './mdns.mjs';
 
+// The API version this device answers with. Like ESPHome's own firmware, the device does not
+// check the client's version: it records it (connection.apiVersion) and replies with its own,
+// and it is the client that decides whether it can talk to us (aioesphomeapi, and so Home
+// Assistant, refuses a server whose major version is above 2).
 export const API_VERSION = { major: 1, minor: 10 };
-const PING_EVERY_MS = 30_000;
-const IDLE_DROP_MS = 90_000;
-const LOG_LEVELS = { error: LogLevel.ERROR, warn: LogLevel.WARN, info: LogLevel.INFO, config: LogLevel.CONFIG, debug: LogLevel.DEBUG, verbose: LogLevel.VERBOSE };
+
+// Defaults, each overridable in the Device options. The limits are ESPHome's: 8 connections on
+// its host platform, 60 s to finish the handshake (an absolute deadline from accept, which
+// pre-handshake traffic does not extend), and 32 KiB per message.
+export const DEFAULTS = {
+  maxConnections: 8,
+  handshakeTimeoutMs: 60_000,
+  pingIntervalMs: 30_000,
+  idleTimeoutMs: 90_000,
+  maxMessageSize: MAX_MESSAGE_SIZE,
+  maxWriteBuffer: 1024 * 1024,
+};
+
+const LOG_LEVELS = { error: LogLevel.ERROR, warn: LogLevel.WARN, info: LogLevel.INFO, config: LogLevel.CONFIG, debug: LogLevel.DEBUG, verbose: LogLevel.VERBOSE, very_verbose: LogLevel.VERY_VERBOSE };
+const LOG_LETTERS = { error: 'E', warn: 'W', info: 'I', config: 'C', debug: 'D', verbose: 'V', very_verbose: 'VV' };
 
 // Stable, locally administered MAC derived from a name: use when the host has no MAC worth
 // exposing (containers) but Home Assistant still needs a unique id that survives restarts.
@@ -42,8 +58,19 @@ class Connection {
     this.hello = false; this.authed = !device.password; this.connected = false;
     this.subscribedStates = false; this.logLevel = LogLevel.NONE; this.wantsServices = false; this.wantsHaStates = false;
     this.clientInfo = '';
+    this.apiVersion = null;                              // { major, minor } from the client's hello
+    const lim = device.limits;
+    // Only a complete message counts as traffic. Bytes that never finish a frame, or a handshake
+    // that never finishes, do not keep a connection alive.
     this.lastSeen = Date.now();
-    this.pingTimer = setInterval(() => this._keepalive(), PING_EVERY_MS);
+    this.handshakeTimer = setTimeout(() => {
+      if (this.connected) return;
+      this.device._log('warn', `${this.peer}: handshake not finished in ${lim.handshakeTimeoutMs / 1000}s, dropping`);
+      this.close();
+    }, lim.handshakeTimeoutMs);
+    this.handshakeTimer.unref?.();
+    this.pingTimer = setInterval(() => this._keepalive(), lim.pingIntervalMs);
+    this.pingTimer.unref?.();
     socket.setNoDelay(true);
     socket.on('data', (chunk) => this._onData(chunk));
     socket.on('error', (err) => this.device._log('debug', `${this.peer}: ${err.message}`));
@@ -51,7 +78,6 @@ class Connection {
   }
 
   _onData(chunk) {
-    this.lastSeen = Date.now();
     try {
       if (!this.framer) {
         const wantsNoise = chunk[0] === INDICATOR_NOISE;
@@ -64,12 +90,13 @@ class Connection {
           try { this.socket.write(new NoiseFramer({}).rejectFrame('Bad indicator byte')); } catch {}
           return this.close();
         }
+        const maxMessageSize = this.device.limits.maxMessageSize;
         this.framer = wantsNoise
-          ? new NoiseFramer({ psk: this.device.psk, name: this.device.name, mac: this.device.mac.plain })
-          : new PlaintextFramer();
+          ? new NoiseFramer({ psk: this.device.psk, name: this.device.name, mac: this.device.mac.plain, maxMessageSize })
+          : new PlaintextFramer({ maxMessageSize });
       }
       const messages = this.framer.feed(chunk, (buf) => this.socket.write(buf));
-      for (const m of messages) this._onMessage(m.type, m.payload);
+      for (const m of messages) { if (this.socket.destroyed) break; this._onMessage(m.type, m.payload); }
     } catch (err) {
       this.device._log('warn', `${this.peer}: ${err.message}`);
       if (err.reject && this.framer?.rejectFrame) { try { this.socket.write(this.framer.rejectFrame(err.reject)); } catch {} }
@@ -78,9 +105,16 @@ class Connection {
   }
 
   send(name, obj = {}) {
-    if (!this.framer?.ready || this.socket.destroyed) return false;
+    if (!this.framer?.ready || this.socket.destroyed || this.closing) return false;
     const schema = byName[name];
     if (!schema) throw new Error(`unknown message ${name}`);
+    // A client that stops reading would otherwise make every state push grow this process's
+    // memory without end. Past the cap the connection is dropped; Home Assistant reconnects.
+    if (this.socket.writableLength > this.device.limits.maxWriteBuffer) {
+      this.device._log('warn', `${this.peer}: not reading (${this.socket.writableLength} bytes queued), dropping`);
+      this.close();
+      return false;
+    }
     try { this.socket.write(this.framer.frame(schema.id, encode(schema, obj))); return true; }
     catch (err) { this.device._log('warn', `${this.peer}: send ${name} failed: ${err.message}`); this.close(); return false; }
   }
@@ -90,10 +124,12 @@ class Connection {
     if (!schema) { this.device._log('debug', `${this.peer}: ignoring message type ${type}`); return; }
     const msg = decode(schema, payload);
     const d = this.device;
+    this.lastSeen = Date.now();
     if (!this.hello && schema.name !== 'HelloRequest') { d._log('warn', `${this.peer}: ${schema.name} before HelloRequest`); return this.close(); }
     switch (schema.name) {
       case 'HelloRequest':
         this.hello = true; this.clientInfo = msg.client_info;
+        this.apiVersion = { major: msg.api_version_major, minor: msg.api_version_minor };
         d._log('debug', `${this.peer}: hello from ${msg.client_info} (api ${msg.api_version_major}.${msg.api_version_minor})`);
         this.send('HelloResponse', { ...API_VERSION_FIELDS, server_info: d.serverInfo, name: d.name });
         if (this.authed) this._becomeConnected();
@@ -141,6 +177,7 @@ class Connection {
   _becomeConnected() {
     if (this.connected) return;
     this.connected = true;
+    clearTimeout(this.handshakeTimer);
     this.device._log('info', `${this.peer}: connected (${this.clientInfo || 'unknown client'})`);
     this.device.emit('connect', this);
   }
@@ -149,17 +186,20 @@ class Connection {
     this.send(e.constructor.stateMsg, e.stateMessage());
   }
   _keepalive() {
-    if (Date.now() - this.lastSeen > IDLE_DROP_MS) { this.device._log('warn', `${this.peer}: no traffic for ${IDLE_DROP_MS / 1000}s, dropping`); return this.close(); }
+    const idle = this.device.limits.idleTimeoutMs;
+    if (Date.now() - this.lastSeen > idle) { this.device._log('warn', `${this.peer}: no message for ${idle / 1000}s, dropping`); return this.close(); }
     if (this.framer?.ready && this.hello) this.send('PingRequest');
   }
   close(reason) {
-    if (this.socket.destroyed) return;
+    if (this.socket.destroyed || this.closing) return;
     if (reason !== undefined && this.framer?.ready) this.send('DisconnectRequest', { reason });
+    this.closing = true;
     this.socket.end();
     const t = setTimeout(() => this.socket.destroy(), 500); t.unref?.();
   }
   _closed() {
     clearInterval(this.pingTimer);
+    clearTimeout(this.handshakeTimer);
     this.device.connections.delete(this);
     if (this.connected) { this.device._log('info', `${this.peer}: disconnected`); this.device.emit('disconnect', this); }
   }
@@ -186,6 +226,13 @@ export class Device extends EventEmitter {
     this.serverInfo = opts.serverInfo ?? `esphome-device on Node ${process.versions.node}`;
     this.compilationTime = opts.compilationTime ?? new Date().toUTCString();
     this.logger = opts.log === false ? null : (opts.log ?? console);
+    this.limits = { ...DEFAULTS };
+    for (const k of Object.keys(DEFAULTS)) {
+      if (opts[k] === undefined) continue;
+      const v = Number(opts[k]);
+      if (!Number.isFinite(v) || v <= 0) throw new Error(`${k} must be a positive number`);
+      this.limits[k] = v;
+    }
     this.entities = new Map();                                 // objectId → entity
     this.byKey = new Map();
     this.services = new Map();
@@ -292,8 +339,9 @@ export class Device extends EventEmitter {
   }
   // Send a log line to clients that subscribed to logs (the ESPHome dashboard, HA's log viewer).
   log(level, message) {
-    const lvl = LOG_LEVELS[level] ?? LogLevel.INFO;
-    const line = Buffer.from(`[${new Date().toISOString().slice(11, 19)}][${level[0].toUpperCase()}][${this.name}]: ${message}`, 'utf8');
+    if (!Object.hasOwn(LOG_LEVELS, level)) level = 'info';
+    const lvl = LOG_LEVELS[level];
+    const line = Buffer.from(`[${new Date().toISOString().slice(11, 19)}][${LOG_LETTERS[level]}][${this.name}]: ${message}`, 'utf8');
     for (const c of this.connections) if (c.logLevel >= lvl) c.send('SubscribeLogsResponse', { level: lvl, message: line });
   }
 
@@ -321,13 +369,28 @@ export class Device extends EventEmitter {
 
   async start() {
     if (this.server) return this;
-    this.server = net.createServer((socket) => this.connections.add(new Connection(this, socket)));
+    this.server = net.createServer((socket) => {
+      // At the cap a new socket is closed straight away, as ESPHome does, so a flood of idle
+      // connections cannot crowd out Home Assistant.
+      if (this.connections.size >= this.limits.maxConnections) {
+        this._log('warn', `max connections (${this.limits.maxConnections}), rejecting ${socket.remoteAddress}:${socket.remotePort}`);
+        socket.on('error', () => {});
+        socket.destroy();
+        return;
+      }
+      this.connections.add(new Connection(this, socket));
+    });
     await new Promise((resolve, reject) => {
       this.server.once('error', reject);
       this.server.listen(this.port, this.host, () => { this.server.off('error', reject); resolve(); });
     });
     this.port = this.server.address().port;
-    this.server.on('error', (err) => this.emit('error', err));
+    // After listening, a server error goes to the app's 'error' listener when it has one, and is
+    // only logged when it does not: an unhandled 'error' event would end the process.
+    this.server.on('error', (err) => {
+      if (this.listenerCount('error')) this.emit('error', err);
+      else this._log('warn', `server error: ${err.message}`);
+    });
     this._log('info', `listening on ${this.host}:${this.port}${this.psk ? ' (noise encryption)' : ' (plaintext)'}`);
     if (this.mdns) await this.mdns.start().catch((err) => this._log('warn', `mDNS: ${err.message}`));
     return this;

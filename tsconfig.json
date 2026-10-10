@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "es2022",
+    "module": "node16",
+    "moduleResolution": "node16",
+    "types": ["node"],
+    "skipLibCheck": false
+  },
+  "files": ["src/index.d.ts", "src/testing.d.ts", "test/types/usage.ts"]
+}
