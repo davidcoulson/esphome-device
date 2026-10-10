@@ -27,8 +27,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test test/",
-    "test:hass": "node --test test/hass.test.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
     "typecheck": "tsc -p tsconfig.json"
   },
   "keywords": [
