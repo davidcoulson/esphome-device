@@ -72,6 +72,11 @@ Every entity has `.state`, `.set(value)` and emits `'state'`. Command handlers g
 requested value: return nothing to accept it, return a value to substitute, or throw to keep the
 old state (Home Assistant's toggle springs back).
 
+Commands for one entity run one at a time, in the order Home Assistant sent them, as on an
+ESPHome board: a slow "on" followed by a quick "off" ends off. Each entity has its own queue, so
+a slow handler holds up only its own entity, but a handler that never settles holds that entity
+for good, so give long work its own timeout.
+
 `stateClass` matters: without it the recorder keeps history but never builds long-term
 statistics.
 
@@ -211,6 +216,24 @@ install aioesphomeapi`) and drives the device through connect, device info, enti
 state subscription, every command type, device-originated actions, a user-defined action, HA
 state subscription, logs and events, in plaintext and with Noise, plus wrong-key and
 wrong-password rejections.
+
+The rest of the suite:
+
+- **Noise against outside implementations.** The published
+  [cacophony](https://github.com/haskell-cryptography/cacophony) vector for
+  `Noise_NNpsk0_25519_ChaChaPoly_SHA256`, and a fresh batch of random transcripts from the
+  Python `noise` library on every run, are replayed through both roles byte for byte. Tampered
+  messages, low-order keys, replays and nonce reuse are checked too. `NOISE_VECTORS=5000` runs
+  more.
+- **Fuzzing.** Seeded fuzzing of the protobuf decoder, both framers and the mDNS parser, plus a
+  live device sprayed with junk that must still answer a real client. A failure prints its
+  seed; replay it with `FUZZ_SEED=…`, and go deeper with `FUZZ_ITERATIONS=100000`.
+- **Hardening.** Every limit: oversized frames, trickled input, connection floods, clients that
+  stop reading, DNS limits, mDNS conflicts and reflection.
+- **Types.** `npm run typecheck` compiles the declarations against a usage sample.
+
+CI runs all of it on every push and every Monday against the newest `aioesphomeapi`, so a
+change on Home Assistant's side shows up here first.
 
 ## License
 

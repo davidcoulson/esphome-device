@@ -1,0 +1,42 @@
+# Runs the whole suite on every push and pull request, and every Monday against the newest
+# aioesphomeapi (the client Home Assistant uses), so a change on Home Assistant's side shows up
+# here before it shows up in an app that depends on this library.
+name: test
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24', 'current']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Home Assistant's client, latest release
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --quiet --upgrade pip
+          .venv/bin/pip install --quiet --upgrade aioesphomeapi
+          .venv/bin/python -c "import importlib.metadata as m; print('aioesphomeapi', m.version('aioesphomeapi'), '| noiseprotocol', m.version('noiseprotocol'))"
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+        env:
+          FUZZ_ITERATIONS: '20000'
+          NOISE_VECTORS: '1000'

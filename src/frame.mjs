@@ -94,9 +94,9 @@ export class NoiseFramer {
       } else if (this.state === 'handshake') {
         if (body.length === 0) throw protocolError('Empty handshake message', 'Empty handshake message');
         if (body[0] !== 0x00) throw protocolError('Bad handshake error byte', 'Bad handshake error byte');
-        try { this.hs.readMessage(body.subarray(1)); }
+        let reply;
+        try { this.hs.readMessage(body.subarray(1)); reply = this.hs.writeMessage(); }
         catch (err) { throw protocolError(err.message, err.code === 'MAC' ? 'Handshake MAC failure' : 'Handshake error'); }
-        const reply = this.hs.writeMessage();
         write(this.frameRaw(Buffer.concat([Buffer.from([0x00]), reply])));
         const keys = this.hs.split();
         this.send = keys.send; this.recv = keys.recv; this.hs = null;

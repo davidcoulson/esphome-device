@@ -48,11 +48,22 @@ export class Entity extends EventEmitter {
   stateMessage() { return null; }
   // Command handling: a subclass calls this with the requested value. The handler may return a
   // replacement value, nothing (adopt the request), or throw (keep the old state).
-  async _command(value) {
-    let result;
-    try { result = this.handler ? await this.handler(value, this) : undefined; }
-    catch (err) { this.device._log('warn', `${this.objectId}: command failed: ${err.message}`); this.device._push(this, true); return; }
-    this.set(result === undefined ? value : result);
+  // Commands for one entity run one at a time, in the order they arrived, as on an ESPHome
+  // board. Without this an async handler for an earlier command could finish after a later
+  // one and leave the older value as the state (a slow "on" landing after a fast "off").
+  // Each entity has its own queue, so a slow entity does not hold up another.
+  _enqueue(job) {
+    const run = (this._queue ?? Promise.resolve()).then(job);
+    this._queue = run.catch(() => {});
+    return run;
+  }
+  _command(value) {
+    return this._enqueue(async () => {
+      let result;
+      try { result = this.handler ? await this.handler(value, this) : undefined; }
+      catch (err) { this.device._log('warn', `${this.objectId}: command failed: ${err.message}`); this.device._push(this, true); return; }
+      this.set(result === undefined ? value : result);
+    });
   }
 }
 
@@ -116,9 +127,11 @@ export class Button extends Entity {
   static list = 'ListEntitiesButtonResponse'; static command = 'ButtonCommandRequest';
   constructor(device, opts, handler) { super(device, opts); this.handler = handler; }
   info() { return { ...super.info(), device_class: this.deviceClass }; }
-  async onCommand() {
-    try { await this.handler?.(this); this.emit('press'); }
-    catch (err) { this.device._log('warn', `${this.objectId}: press failed: ${err.message}`); }
+  onCommand() {
+    return this._enqueue(async () => {
+      try { await this.handler?.(this); this.emit('press'); }
+      catch (err) { this.device._log('warn', `${this.objectId}: press failed: ${err.message}`); }
+    });
   }
 }
 
@@ -158,11 +171,13 @@ export class Update extends Entity {
     return { key: this.key, missing_state: !this.hasState, in_progress: !!s.inProgress, has_progress: typeof s.progress === 'number', progress: s.progress ?? 0,
       current_version: s.current ?? '', latest_version: s.latest ?? s.current ?? '', title: s.title ?? '', release_summary: s.summary ?? '', release_url: s.url ?? '' };
   }
-  async onCommand(msg) {
+  onCommand(msg) {
     const what = msg.command === 1 ? 'install' : msg.command === 2 ? 'check' : null;
-    if (!what) return;
-    try { await this.handler?.(what, this); this.emit(what); }
-    catch (err) { this.device._log('warn', `${this.objectId}: ${what} failed: ${err.message}`); }
+    if (!what) return Promise.resolve();
+    return this._enqueue(async () => {
+      try { await this.handler?.(what, this); this.emit(what); }
+      catch (err) { this.device._log('warn', `${this.objectId}: ${what} failed: ${err.message}`); }
+    });
   }
 }
 

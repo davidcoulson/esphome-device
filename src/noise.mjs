@@ -5,7 +5,7 @@
 //   <- e, ee
 // Reference: the Noise spec (revision 34) and ESPHome's api_frame_helper_noise.cpp.
 
-import { createHash, createHmac, createCipheriv, createDecipheriv, generateKeyPairSync, diffieHellman, createPublicKey } from 'node:crypto';
+import { createHash, createHmac, createCipheriv, createDecipheriv, generateKeyPairSync, diffieHellman, createPublicKey, createPrivateKey } from 'node:crypto';
 
 export const PROTOCOL_NAME = 'Noise_NNpsk0_25519_ChaChaPoly_SHA256';
 const SPKI_X25519_PREFIX = Buffer.from('302a300506032b656e032100', 'hex');
@@ -51,15 +51,30 @@ export class CipherState {
   }
 }
 
-function x25519() {
-  const { publicKey, privateKey } = generateKeyPairSync('x25519');
+const PKCS8_X25519_PREFIX = Buffer.from('302e020100300506032b656e04220420', 'hex');
+
+// A fresh ephemeral key pair, or the one given as 32 raw private bytes. The fixed key exists only
+// so the test vectors can be replayed; a real handshake always takes a fresh one.
+function x25519(raw) {
+  let privateKey, publicKey;
+  if (raw) {
+    if (raw.length !== 32) throw new Error('ephemeral key must be 32 bytes');
+    privateKey = createPrivateKey({ key: Buffer.concat([PKCS8_X25519_PREFIX, raw]), format: 'der', type: 'pkcs8' });
+    publicKey = createPublicKey(privateKey);
+  } else ({ publicKey, privateKey } = generateKeyPairSync('x25519'));
   const pub = publicKey.export({ type: 'spki', format: 'der' }).subarray(SPKI_X25519_PREFIX.length);
   return { pub, privateKey };
 }
 
+// X25519 with the peer's raw public key. OpenSSL refuses a key whose shared secret would be all
+// zeros (the low-order points); that becomes a handshake error rather than a stray crypto error.
 function dh(privateKey, peerPub) {
-  const publicKey = createPublicKey({ key: Buffer.concat([SPKI_X25519_PREFIX, peerPub]), format: 'der', type: 'spki' });
-  return diffieHellman({ privateKey, publicKey });
+  try {
+    const publicKey = createPublicKey({ key: Buffer.concat([SPKI_X25519_PREFIX, peerPub]), format: 'der', type: 'spki' });
+    return diffieHellman({ privateKey, publicKey });
+  } catch {
+    throw Object.assign(new Error('Handshake error: unusable ephemeral key'), { code: 'BADKEY' });
+  }
 }
 
 // Responder for NNpsk0. Usage:
@@ -67,9 +82,10 @@ function dh(privateKey, peerPub) {
 //   hs.readMessage(msg1)            // "-> psk, e" from the initiator; returns its payload
 //   const msg2 = hs.writeMessage()  // "<- e, ee"; afterwards hs.split() gives the transport keys
 export class NoiseResponder {
-  constructor(psk, prologue = Buffer.alloc(0)) {
+  constructor(psk, prologue = Buffer.alloc(0), { ephemeral } = {}) {
     if (psk.length !== 32) throw new Error('psk must be 32 bytes');
     this.psk = psk;
+    this.fixedEphemeral = ephemeral;
     const name = Buffer.from(PROTOCOL_NAME, 'ascii');
     this.h = name.length <= 32 ? Buffer.concat([name, Buffer.alloc(32 - name.length)]) : sha256(name);
     this.ck = this.h;
@@ -123,7 +139,7 @@ export class NoiseResponder {
   // "<- e, ee": our ephemeral key, then the shared secret, then an encrypted payload.
   writeMessage(payload = Buffer.alloc(0)) {
     if (!this.re) throw new Error('read the initiator message first');
-    this.e = x25519();
+    this.e = x25519(this.fixedEphemeral);
     this.mixHash(this.e.pub);
     this.mixKey(this.e.pub);
     this.mixKey(dh(this.e.privateKey, this.re));
@@ -142,13 +158,14 @@ export class NoiseResponder {
 
 // Initiator, used by the tests so the handshake can be exercised without Home Assistant.
 export class NoiseInitiator {
-  constructor(psk, prologue = Buffer.alloc(0)) {
+  constructor(psk, prologue = Buffer.alloc(0), { ephemeral } = {}) {
     this.r = new NoiseResponder(psk, prologue);           // reuse the symmetric-state helpers
+    this.fixedEphemeral = ephemeral;
   }
   writeMessage(payload = Buffer.alloc(0)) {
     const s = this.r;
     s.mixKeyAndHash(s.psk);
-    this.e = x25519();
+    this.e = x25519(this.fixedEphemeral);
     s.mixHash(this.e.pub);
     s.mixKey(this.e.pub);
     return Buffer.concat([this.e.pub, s.encryptAndHash(payload)]);

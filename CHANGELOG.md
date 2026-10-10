@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.1 — 2026-10-10
+
+0.3.0 was tagged but never published; this release includes it.
+
+- **Commands are applied in order.** Each entity's commands now run one at a time in the order
+  Home Assistant sent them, as on an ESPHome board. Before, async handlers ran concurrently and
+  whichever finished last won, so a slow "on" followed by a quick "off" could leave the entity
+  on. Buttons and update commands are queued the same way; each entity has its own queue.
+- **A low-order key from a client is a clean handshake rejection** ("Handshake error"), sent
+  before the close, instead of an unexplained drop.
+- **Noise is checked against outside implementations**: the published cacophony vector for this
+  protocol and random transcripts from the Python `noise` library, byte for byte, in both roles.
+  No discrepancy was found.
+- **Seeded fuzzing** of the protobuf decoder, both framers, the mDNS parser and a live device.
+  No crash, hang or over-buffering was found in 100,000 iterations per parser.
+- **CI** runs the suite on every push and weekly against the newest `aioesphomeapi`, on Node 22,
+  24 and current.
+
 ## 0.3.0 — 2026-10-10
 
 Hardening from a full code review. The limits match ESPHome's own, so nothing that works with
